@@ -44,6 +44,7 @@ public final class CborRustPayloadCodec implements RustPayloadCodec {
 
     private static final String VERSION = "version";
     private static final String INVOCATION_ID = "invocationId";
+    private static final String OPERATION = "operation";
     private static final String BODY = "body";
     private static final String HEADERS = "headers";
     private static final String PROPERTIES = "properties";
@@ -93,10 +94,17 @@ public final class CborRustPayloadCodec implements RustPayloadCodec {
                     "request.invocationId must not be null or blank");
         }
 
+        if (request.operation() == null
+                || request.operation().isBlank()) {
+            throw new IllegalArgumentException(
+                    "request.operation must not be null or blank");
+        }
+
         Map<String, Object> envelope = new LinkedHashMap<>();
 
         envelope.put(VERSION, PROTOCOL_VERSION);
         envelope.put(INVOCATION_ID, request.invocationId());
+        envelope.put(OPERATION, request.operation());
         envelope.put(BODY, request.body());
         envelope.put(
                 HEADERS,
@@ -191,7 +199,8 @@ public final class CborRustPayloadCodec implements RustPayloadCodec {
 
         JsonNode invocationId = root.get(INVOCATION_ID);
 
-        if (invocationId == null || !invocationId.isTextual()
+        if (invocationId == null
+                || !invocationId.isTextual()
                 || invocationId.textValue().isBlank()) {
             throw new IllegalArgumentException(
                     "Rust CBOR payload is missing a valid invocationId");
@@ -247,13 +256,13 @@ public final class CborRustPayloadCodec implements RustPayloadCodec {
          * Jackson's Object.class conversion preserves the natural CBOR
          * structure:
          *
-         * object -> Map
-         * array  -> List
-         * text   -> String
+         * object  -> Map
+         * array   -> List
+         * text    -> String
          * boolean -> Boolean
          * integral -> Integer/Long/BigInteger as appropriate
          * floating -> Double
-         * binary -> byte[]
+         * binary   -> byte[]
          *
          * This keeps the codec independent from application-specific POJOs.
          */

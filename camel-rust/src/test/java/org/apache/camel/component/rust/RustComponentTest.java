@@ -36,7 +36,7 @@ public class RustComponentTest extends CamelTestSupport {
     protected CamelContext createCamelContext() throws Exception {
         CamelContext context = super.createCamelContext();
 
-        RustComponent component = new RustComponent(processorName -> new DefaultRustNativeRuntime());
+        RustComponent component = new RustComponent(operation -> new DefaultRustNativeRuntime());
 
         context.addComponent("rust", component);
         return context;

@@ -17,7 +17,6 @@
 
 package org.apache.camel.component.rust;
 
-import java.nio.file.Path;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -32,15 +31,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DefaultRustNativeRuntimeTest {
 
-    private static final Path NATIVE_LIBRARY = Path.of("src/main/rust/target/release/libcamel_rust.so");
+    private static final String NATIVE_LIBRARY = "camel_rust";
 
     @Test
     void testExecuteCompletesInvocationAndUpdatesExchange() throws Exception {
-        assertTrue(
-                NATIVE_LIBRARY.toFile().isFile(),
-                "Native Rust library must exist: " + NATIVE_LIBRARY.toAbsolutePath());
-
-        RustNativeBindings nativeRuntime = new RustNativeBindings(NATIVE_LIBRARY.toAbsolutePath().toString());
+        RustNativeBindings nativeRuntime = new RustNativeBindings(NATIVE_LIBRARY);
 
         DefaultCamelContext camelContext = new DefaultCamelContext();
         Exchange exchange = new DefaultExchange(camelContext);
@@ -51,6 +46,7 @@ class DefaultRustNativeRuntimeTest {
 
         RustInvocation invocation = new RustInvocation(
                 "test-invocation",
+                "test-operation",
                 null,
                 exchange,
                 done -> {
@@ -84,13 +80,14 @@ class DefaultRustNativeRuntimeTest {
 
     @Test
     void testExecuteRejectsWhenRuntimeIsNotStarted() throws Exception {
-        RustNativeBindings nativeRuntime = new RustNativeBindings(NATIVE_LIBRARY.toAbsolutePath().toString());
+        RustNativeBindings nativeRuntime = new RustNativeBindings(NATIVE_LIBRARY);
 
         DefaultCamelContext camelContext = new DefaultCamelContext();
         Exchange exchange = new DefaultExchange(camelContext);
 
         RustInvocation invocation = new RustInvocation(
                 "test-not-started",
+                "test-operation",
                 null,
                 exchange,
                 done -> {

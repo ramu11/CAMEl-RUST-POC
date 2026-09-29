@@ -95,7 +95,7 @@ public class RustInvocationContext {
      * @param  invocationId unique invocation identifier
      * @return              invocation request snapshot
      */
-    public RustInvocationRequest createRequest(String invocationId) {
+    public RustInvocationRequest createRequest(String invocationId, String operation) {
         ensureActive();
 
         Object body = readBody();
@@ -108,7 +108,7 @@ public class RustInvocationContext {
                 ? new HashMap<>(exchange.getProperties())
                 : new HashMap<>();
 
-        return new RustInvocationRequest(invocationId, body, headers, properties);
+        return new RustInvocationRequest(invocationId, operation, body, headers, properties);
     }
 
     private void ensureActive() {

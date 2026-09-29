@@ -22,10 +22,10 @@ package org.apache.camel.component.rust;
 public interface RustRuntimeFactory {
 
     /**
-     * Creates or retrieves a {@link RustRuntime} for the given processor name.
+     * Creates or retrieves a {@link RustRuntime} for the given Rust operation.
      *
-     * @param  processorName the route-configured target processor identifier
-     * @return               configured RustRuntime instance
+     * @param  operation the route-configured Rust operation identifier
+     * @return           configured RustRuntime instance
      */
-    RustRuntime createRuntime(String processorName);
+    RustRuntime createRuntime(String operation);
 }

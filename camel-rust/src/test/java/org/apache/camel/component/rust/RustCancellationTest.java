@@ -51,80 +51,124 @@ public class RustCancellationTest {
     }
 
     @Test
-    void testRequestCancellationIsIdempotentAndDoesNotTriggerCallback() {
+    void testRequestCancellationIsIdempotentAndRevokesContext() {
         Exchange exchange = new DefaultExchange(context);
-        AtomicInteger callbackCount = new AtomicInteger(0);
+        AtomicInteger callbackCount = new AtomicInteger();
 
-        RustInvocation invocation = new RustInvocation("inv-d8-1", exchange, doneSync -> callbackCount.incrementAndGet());
+        RustInvocation invocation = new RustInvocation(
+                "inv-d8-1",
+                exchange,
+                doneSync -> callbackCount.incrementAndGet());
 
-        // Initial state
-        assertEquals(RustInvocation.LifecycleState.ACTIVE, invocation.getState());
+        assertEquals(
+                RustInvocation.LifecycleState.ACTIVE,
+                invocation.getState());
 
-        // First cancellation request
-        boolean requestedFirst = invocation.requestCancellation();
-        assertTrue(requestedFirst);
+        assertTrue(invocation.requestCancellation());
+
         assertTrue(invocation.isCancellationRequested());
-        assertEquals(RustInvocation.LifecycleState.CANCELLATION_REQUESTED, invocation.getState());
-        assertEquals(0, callbackCount.get(), "requestCancellation() MUST NOT execute completion callback");
+        assertEquals(
+                RustInvocation.LifecycleState.CANCELLATION_REQUESTED,
+                invocation.getState());
 
-        // Second cancellation request (idempotency check)
-        boolean requestedSecond = invocation.requestCancellation();
-        assertFalse(requestedSecond);
-        assertEquals(0, callbackCount.get(), "Duplicate cancellation requests MUST NOT execute callback");
+        assertEquals(
+                0,
+                callbackCount.get(),
+                "Cancellation request must not complete the invocation");
 
-        // Context revocation check
-        assertThrows(IllegalStateException.class, () -> invocation.getContext().readBody());
+        assertFalse(
+                invocation.requestCancellation(),
+                "Cancellation request must be idempotent");
+
+        assertEquals(
+                0,
+                callbackCount.get(),
+                "Repeated cancellation must not execute the completion callback");
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> invocation.getContext().readBody(),
+                "Invocation context must be revoked after cancellation");
     }
 
     @Test
     void testCompletionAfterCancellationIsExactlyOnce() throws Exception {
         Exchange exchange = new DefaultExchange(context);
-        CountDownLatch latch = new CountDownLatch(1);
-        AtomicInteger callbackCount = new AtomicInteger(0);
+        CountDownLatch completionLatch = new CountDownLatch(1);
+        AtomicInteger callbackCount = new AtomicInteger();
 
-        RustInvocation invocation = new RustInvocation("inv-d8-2", exchange, doneSync -> {
-            callbackCount.incrementAndGet();
-            latch.countDown();
-        });
+        RustInvocation invocation = new RustInvocation(
+                "inv-d8-2",
+                exchange,
+                doneSync -> {
+                    callbackCount.incrementAndGet();
+                    completionLatch.countDown();
+                });
 
         assertTrue(invocation.requestCancellation());
 
-        // First completion call after cancellation
-        boolean completedFirst = invocation.complete(false);
-        assertTrue(completedFirst);
+        assertTrue(invocation.complete(false));
         assertTrue(invocation.isCompleted());
-        assertEquals(RustInvocation.LifecycleState.COMPLETED, invocation.getState());
+        assertEquals(
+                RustInvocation.LifecycleState.COMPLETED,
+                invocation.getState());
 
-        // Second completion call
-        boolean completedSecond = invocation.complete(false);
-        assertFalse(completedSecond);
+        assertFalse(
+                invocation.complete(false),
+                "A completed invocation must reject subsequent completion");
 
-        assertTrue(latch.await(1, TimeUnit.SECONDS));
-        assertEquals(1, callbackCount.get(), "Callback must execute exactly once even after cancellation");
+        assertTrue(
+                completionLatch.await(1, TimeUnit.SECONDS),
+                "Completion callback must be invoked");
+
+        assertEquals(
+                1,
+                callbackCount.get(),
+                "Completion callback must execute exactly once");
     }
 
     @Test
-    void testCancellationAndCompletionRace() throws Exception {
+    void testCancellationAndCompletionRaceCompletesExactlyOnce() throws Exception {
         Exchange exchange = new DefaultExchange(context);
-        CountDownLatch latch = new CountDownLatch(1);
-        AtomicInteger callbackCount = new AtomicInteger(0);
+        CountDownLatch completionLatch = new CountDownLatch(1);
+        AtomicInteger callbackCount = new AtomicInteger();
 
-        RustInvocation invocation = new RustInvocation("inv-d8-race", exchange, doneSync -> {
-            callbackCount.incrementAndGet();
-            latch.countDown();
-        });
+        RustInvocation invocation = new RustInvocation(
+                "inv-d8-race",
+                exchange,
+                doneSync -> {
+                    callbackCount.incrementAndGet();
+                    completionLatch.countDown();
+                });
 
-        Thread cancelThread = new Thread(invocation::requestCancellation);
-        Thread completeThread = new Thread(() -> invocation.complete(false));
+        Thread cancellationThread = new Thread(invocation::requestCancellation);
+        Thread completionThread = new Thread(() -> invocation.complete(false));
 
-        cancelThread.start();
-        completeThread.start();
+        cancellationThread.start();
+        completionThread.start();
 
-        cancelThread.join();
-        completeThread.join();
+        cancellationThread.join();
+        completionThread.join();
 
-        assertTrue(invocation.complete(false) == false || invocation.isCompleted());
-        assertTrue(latch.await(1, TimeUnit.SECONDS));
-        assertEquals(1, callbackCount.get(), "Callback must be invoked exactly once during racing conditions");
+        assertTrue(
+                completionLatch.await(1, TimeUnit.SECONDS),
+                "The invocation must eventually complete");
+
+        assertTrue(
+                invocation.isCompleted(),
+                "The invocation must reach COMPLETED state");
+
+        assertEquals(
+                RustInvocation.LifecycleState.COMPLETED,
+                invocation.getState());
+
+        assertEquals(
+                1,
+                callbackCount.get(),
+                "Completion callback must execute exactly once");
+
+        assertFalse(
+                invocation.complete(false),
+                "Completion after the race must remain idempotent");
     }
 }

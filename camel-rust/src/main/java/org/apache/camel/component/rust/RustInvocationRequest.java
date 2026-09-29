@@ -20,6 +20,7 @@ import java.util.Map;
 
 public record RustInvocationRequest(
         String invocationId,
+        String operation,
         Object body,
         Map<String, Object> headers,
         Map<String, Object> properties) {

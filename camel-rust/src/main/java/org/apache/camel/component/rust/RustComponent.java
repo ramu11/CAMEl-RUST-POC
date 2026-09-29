@@ -33,7 +33,7 @@ public class RustComponent extends DefaultComponent {
     private final PendingInvocationRegistry registry = new PendingInvocationRegistry();
 
     public RustComponent() {
-        this(processorName -> new DefaultRustNativeRuntime());
+        this(operation -> new DefaultRustNativeRuntime());
     }
 
     public RustComponent(RustRuntimeFactory runtimeFactory) {
@@ -48,7 +48,7 @@ public class RustComponent extends DefaultComponent {
 
     @Override
     protected void doStop() throws Exception {
-        // Drain pending invocations by delegating to their owning runtime's cancel contract
+        // Drain pending invocations by delegating to their owning runtime's cancel contract.
         for (RustInvocation invocation : registry.snapshot()) {
             RustRuntime runtime = invocation.getRuntime();
 
@@ -72,9 +72,19 @@ public class RustComponent extends DefaultComponent {
     }
 
     @Override
-    protected Endpoint createEndpoint(String uri, String remaining, Map<String, Object> parameters) throws Exception {
-        RustRuntime runtime = runtimeFactory != null ? runtimeFactory.createRuntime(remaining) : new DefaultRustNativeRuntime();
-        RustEndpoint endpoint = new RustEndpoint(uri, this, remaining, runtime);
+    protected Endpoint createEndpoint(
+            String uri,
+            String remaining,
+            Map<String, Object> parameters)
+            throws Exception {
+
+        String operation = remaining;
+
+        RustRuntime runtime = runtimeFactory != null
+                ? runtimeFactory.createRuntime(operation)
+                : new DefaultRustNativeRuntime();
+
+        RustEndpoint endpoint = new RustEndpoint(uri, this, operation, runtime);
         setProperties(endpoint, parameters);
         return endpoint;
     }

@@ -16,8 +16,6 @@
  */
 package org.apache.camel.component.rust;
 
-import java.nio.file.Path;
-
 import org.apache.camel.CamelContext;
 import org.apache.camel.builder.RouteBuilder;
 import org.apache.camel.impl.DefaultCamelContext;
@@ -30,7 +28,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class RustRuntimeLifecycleTest {
 
-    private static final Path NATIVE_LIBRARY = Path.of("src/main/rust/target/release/libcamel_rust.so");
+    private static final String NATIVE_LIBRARY = "camel_rust";
+    private static final String OPERATION = "test-operation";
 
     private CamelContext context;
     private DefaultRustNativeRuntime testRuntime;
@@ -39,13 +38,13 @@ public class RustRuntimeLifecycleTest {
     void setUp() throws Exception {
         context = new DefaultCamelContext();
 
-        RustNativeBindings nativeRuntime = new RustNativeBindings(NATIVE_LIBRARY.toAbsolutePath().toString());
+        RustNativeBindings nativeRuntime = new RustNativeBindings(NATIVE_LIBRARY);
 
         testRuntime = new DefaultRustNativeRuntime(
                 nativeRuntime,
                 new CborRustPayloadCodec());
 
-        RustComponent component = new RustComponent(processorName -> testRuntime);
+        RustComponent component = new RustComponent(operation -> testRuntime);
 
         context.addComponent("rust", component);
 
@@ -53,7 +52,7 @@ public class RustRuntimeLifecycleTest {
             @Override
             public void configure() {
                 from("direct:start")
-                        .to("rust:uppercaseProcessor");
+                        .to("rust:" + OPERATION);
             }
         });
     }
@@ -85,7 +84,7 @@ public class RustRuntimeLifecycleTest {
         context.start();
 
         RustEndpoint endpoint = context.getEndpoint(
-                "rust:uppercaseProcessor",
+                "rust:" + OPERATION,
                 RustEndpoint.class);
 
         assertNotNull(endpoint, "Endpoint should be resolved");

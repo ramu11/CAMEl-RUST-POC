@@ -16,10 +16,12 @@
  */
 package org.apache.camel.component.rust;
 
-public interface RustExecutor {
+import org.junit.jupiter.api.Test;
 
-    void execute(
-            RustInvocationRequest request,
-            RustCancellationToken cancellationToken,
-            RustCompletionHandler completionHandler);
+class RustNativeIntegrationTest {
+
+    @Test
+    void shouldExecuteRealRustStructAndCollectionsFromCamelRoute() {
+
+    }
 }

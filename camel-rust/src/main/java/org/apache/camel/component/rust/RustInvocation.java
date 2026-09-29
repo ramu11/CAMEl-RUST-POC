@@ -25,6 +25,11 @@ import org.apache.camel.Exchange;
 
 /**
  * Fundamental semantic root for a single Camel-Rust execution lifetime.
+ *
+ * <p>
+ * A RustInvocation represents one execution requested by a Camel exchange. It owns the invocation lifecycle,
+ * cancellation state, timeout task and completion callback coordination.
+ * </p>
  */
 public class RustInvocation {
 
@@ -35,29 +40,41 @@ public class RustInvocation {
     }
 
     private final String invocationId;
+    private final String operation;
     private final RustRuntime runtime;
     private final RustInvocationContext context;
     private final AsyncCallback callback;
-    private final RustInvocationListener listener;
     private final AtomicReference<LifecycleState> state = new AtomicReference<>(LifecycleState.ACTIVE);
     private final AtomicReference<ScheduledFuture<?>> timeoutFuture = new AtomicReference<>();
     private final AtomicBoolean completedOnce = new AtomicBoolean(false);
 
     public RustInvocation(String invocationId, Exchange exchange, AsyncCallback callback) {
-        this(invocationId, null, exchange, callback, null);
+        this(invocationId, null, null, exchange, callback);
     }
 
-    public RustInvocation(String invocationId, RustRuntime runtime, Exchange exchange, AsyncCallback callback) {
-        this(invocationId, runtime, exchange, callback, null);
+    public RustInvocation(
+                          String invocationId,
+                          RustRuntime runtime,
+                          Exchange exchange,
+                          AsyncCallback callback) {
+        this(invocationId, null, runtime, exchange, callback);
     }
 
-    public RustInvocation(String invocationId, RustRuntime runtime, Exchange exchange, AsyncCallback callback,
-                          RustInvocationListener listener) {
+    public RustInvocation(
+                          String invocationId,
+                          String operation,
+                          RustRuntime runtime,
+                          Exchange exchange,
+                          AsyncCallback callback) {
         this.invocationId = invocationId;
+        this.operation = operation;
         this.runtime = runtime;
         this.context = new RustInvocationContext(exchange);
         this.callback = callback;
-        this.listener = listener;
+    }
+
+    public String getOperation() {
+        return operation;
     }
 
     public String getInvocationId() {
@@ -92,7 +109,8 @@ public class RustInvocation {
     }
 
     public boolean isCancellationRequested() {
-        return state.get() == LifecycleState.CANCELLATION_REQUESTED || state.get() == LifecycleState.COMPLETED;
+        return state.get() == LifecycleState.CANCELLATION_REQUESTED
+                || state.get() == LifecycleState.COMPLETED;
     }
 
     void setTimeoutFuture(ScheduledFuture<?> future) {
@@ -136,9 +154,6 @@ public class RustInvocation {
 
     private void triggerCompletionCallbacks(boolean doneSync) {
         if (completedOnce.compareAndSet(false, true)) {
-            if (listener != null) {
-                listener.onInvocationCompleted(this);
-            }
             if (callback != null) {
                 callback.done(doneSync);
             }

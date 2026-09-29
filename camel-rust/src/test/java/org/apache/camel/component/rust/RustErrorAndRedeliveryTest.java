@@ -17,103 +17,76 @@
 package org.apache.camel.component.rust;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.camel.CamelContext;
 import org.apache.camel.Exchange;
 import org.apache.camel.builder.RouteBuilder;
 import org.apache.camel.impl.DefaultCamelContext;
-import org.apache.camel.support.DefaultExchange;
+import org.apache.camel.support.service.ServiceSupport;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-public class RustErrorAndRedeliveryTest {
+class RustErrorAndRedeliveryTest {
 
     private CamelContext context;
-    private PendingInvocationRegistry registry;
+    private RustComponent rustComponent;
+    private FailingRustRuntime runtime;
 
     @BeforeEach
     void setUp() throws Exception {
         context = new DefaultCamelContext();
-        registry = new PendingInvocationRegistry();
-        registry.start();
+
+        runtime = new FailingRustRuntime();
+        rustComponent = new RustComponent(operation -> runtime);
+
+        context.addComponent("rust", rustComponent);
     }
 
     @AfterEach
-    void tearDown() {
-        if (registry != null) {
-            registry.stop();
-        }
+    void tearDown() throws Exception {
         if (context != null) {
             context.stop();
         }
     }
 
     @Test
-    void testAsyncRustFailureReachesCamelErrorHandler() throws Exception {
-        AsyncRuntime failingRuntime = new AsyncRuntime(10, true);
-        failingRuntime.start();
+    void testRustFailureReachesCamelErrorHandler() throws Exception {
+        context.addRoutes(new RouteBuilder() {
+            @Override
+            public void configure() {
+                from("direct:failure")
+                        .to("rust:failing-operation");
+            }
+        });
 
-        RustProcessor processor = new RustProcessor("failingProc", failingRuntime, registry);
+        context.start();
 
-        Exchange exchange = new DefaultExchange(context);
-        exchange.getIn().setBody("fail async payload");
+        Exchange exchange = context.createProducerTemplate()
+                .request("direct:failure", e -> e.getIn().setBody("input"));
 
-        CountDownLatch latch = new CountDownLatch(1);
-        boolean sync = processor.process(exchange, doneSync -> latch.countDown());
-
-        assertFalse(sync);
-        assertTrue(latch.await(2, TimeUnit.SECONDS));
-
-        assertInstanceOf(RustExecutionException.class, exchange.getException(),
-                "Async runtime failure must propagate as RustExecutionException");
-        assertEquals(0, registry.size(), "Pending registry must be empty post-failure");
-
-        failingRuntime.stop();
+        assertNotNull(exchange.getException());
+        assertTrue(exchange.getException() instanceof RustExecutionException);
+        assertEquals(1, runtime.getInvocationCount());
+        assertTrue(rustComponent.getRegistry().isEmpty());
     }
 
     @Test
-    void testProductionProcessorCamelRedeliverySequenceAndIsolation() throws Exception {
-        AsyncRuntime failingRuntime = new AsyncRuntime(10, true);
-        failingRuntime.start();
+    void testCamelRedeliveryCreatesDistinctRustInvocationsOnSameExchange() throws Exception {
+        List<String> invocationIds = new ArrayList<>();
+        List<Exchange> exchanges = new ArrayList<>();
 
-        List<String> eventLog = Collections.synchronizedList(new ArrayList<>());
-        List<RustInvocation> capturedInvocations = Collections.synchronizedList(new ArrayList<>());
-        List<Exchange> capturedExchanges = Collections.synchronizedList(new ArrayList<>());
-
-        RustProcessor productionProcessor = new RustProcessor("failingProc", failingRuntime, registry);
-        productionProcessor.setListener(new RustInvocationListener() {
-            @Override
-            public void onInvocationCreated(RustInvocation invocation) {
-                capturedInvocations.add(invocation);
-                capturedExchanges.add(invocation.getExchange());
-                eventLog.add("CREATED:" + invocation.getInvocationId());
-            }
-
-            @Override
-            public void onInvocationCompleted(RustInvocation invocation) {
-                boolean revoked = false;
-                try {
-                    invocation.getContext().readBody();
-                } catch (IllegalStateException expected) {
-                    revoked = true;
-                }
-                eventLog.add("COMPLETED:" + invocation.getInvocationId() + ":state=" + invocation.getState() + ":revoked="
-                             + revoked);
-            }
+        runtime.setObserver(invocation -> {
+            invocationIds.add(invocation.getInvocationId());
+            exchanges.add(invocation.getExchange());
         });
 
         context.addRoutes(new RouteBuilder() {
@@ -121,83 +94,103 @@ public class RustErrorAndRedeliveryTest {
             public void configure() {
                 errorHandler(defaultErrorHandler()
                         .maximumRedeliveries(2)
-                        .redeliveryDelay(10));
+                        .redeliveryDelay(0));
 
-                from("direct:redeliveryRoute")
-                        .process(productionProcessor);
+                from("direct:redelivery")
+                        .to("rust:failing-operation");
             }
         });
+
         context.start();
 
-        Exchange resultExchange = context.createProducerTemplate().send("direct:redeliveryRoute", exchange -> {
-            exchange.getIn().setBody("redelivery test body");
-        });
+        Exchange exchange = context.createProducerTemplate()
+                .request("direct:redelivery", e -> e.getIn().setBody("input"));
 
-        // 1. Assert exactly 6 events logged (3 CREATED + 3 COMPLETED)
-        assertEquals(6, eventLog.size(), "Must record 6 total interleaved lifecycle events");
+        assertNotNull(exchange.getException());
+        assertTrue(exchange.getException() instanceof RustExecutionException);
 
-        RustInvocation attempt1 = capturedInvocations.get(0);
-        RustInvocation attempt2 = capturedInvocations.get(1);
-        RustInvocation attempt3 = capturedInvocations.get(2);
+        assertEquals(3, runtime.getInvocationCount());
+        assertEquals(3, invocationIds.size());
+        assertEquals(3, invocationIds.stream().distinct().count());
 
-        // 2. Assert strict ordering and revocation state at the moment of event emission
-        assertEquals("CREATED:" + attempt1.getInvocationId(), eventLog.get(0));
-        assertEquals("COMPLETED:" + attempt1.getInvocationId() + ":state=COMPLETED:revoked=true", eventLog.get(1));
+        assertEquals(3, exchanges.size());
+        assertSame(exchange, exchanges.get(0));
+        assertSame(exchange, exchanges.get(1));
+        assertSame(exchange, exchanges.get(2));
 
-        assertEquals("CREATED:" + attempt2.getInvocationId(), eventLog.get(2));
-        assertEquals("COMPLETED:" + attempt2.getInvocationId() + ":state=COMPLETED:revoked=true", eventLog.get(3));
-
-        assertEquals("CREATED:" + attempt3.getInvocationId(), eventLog.get(4));
-        assertEquals("COMPLETED:" + attempt3.getInvocationId() + ":state=COMPLETED:revoked=true", eventLog.get(5));
-
-        // 3. Assert distinct invocation instances & IDs per attempt
-        assertNotEquals(attempt1.getInvocationId(), attempt2.getInvocationId());
-        assertNotEquals(attempt2.getInvocationId(), attempt3.getInvocationId());
-
-        // 4. Assert Exchange identity remains preserved across all attempts
-        assertSame(capturedExchanges.get(0), capturedExchanges.get(1),
-                "Exchange identity must be preserved across attempt 1 and 2");
-        assertSame(capturedExchanges.get(1), capturedExchanges.get(2),
-                "Exchange identity must be preserved across attempt 2 and 3");
-
-        // 5. Assert total registry cleanup
-        assertEquals(0, registry.size(), "Registry must be empty post redeliveries");
-
-        // 6. Assert final unhandled failure remains on the Exchange
-        assertNotNull(resultExchange.getException(), "Final unhandled exception must remain on Exchange");
-        assertInstanceOf(RustExecutionException.class, resultExchange.getException());
-
-        failingRuntime.stop();
+        assertTrue(rustComponent.getRegistry().isEmpty());
     }
 
     @Test
-    void testOnExceptionHandledPreventsCamelRedeliveryAndLeavesRegistryEmpty() throws Exception {
-        AsyncRuntime failingRuntime = new AsyncRuntime(10, true);
-        failingRuntime.start();
-
-        RustProcessor productionProcessor = new RustProcessor("failingProc", failingRuntime, registry);
-
+    void testOnExceptionHandledPreventsRedeliveryAndClearsFailure() throws Exception {
         context.addRoutes(new RouteBuilder() {
             @Override
             public void configure() {
                 onException(RustExecutionException.class)
                         .handled(true)
-                        .transform().constant("HANDLED_BY_CAMEL");
+                        .transform()
+                        .constant("handled");
 
-                from("direct:onExceptionRoute")
-                        .process(productionProcessor);
+                from("direct:handled")
+                        .to("rust:failing-operation");
             }
         });
+
         context.start();
 
-        Exchange result = context.createProducerTemplate().send("direct:onExceptionRoute", exchange -> {
-            exchange.getIn().setBody("trigger fallback");
-        });
+        Exchange exchange = context.createProducerTemplate()
+                .request("direct:handled", e -> e.getIn().setBody("input"));
 
-        assertNull(result.getException(), "Handled exception must be cleared from Exchange by Camel");
-        assertEquals("HANDLED_BY_CAMEL", result.getMessage().getBody(), "Fallback payload set by onException route");
-        assertEquals(0, registry.size(), "Registry must be empty after handled error");
+        assertNull(exchange.getException());
+        assertEquals("handled", exchange.getIn().getBody());
+        assertEquals(1, runtime.getInvocationCount());
+        assertTrue(rustComponent.getRegistry().isEmpty());
+    }
 
-        failingRuntime.stop();
+    private static final class FailingRustRuntime extends ServiceSupport implements RustRuntime {
+
+        private final AtomicInteger invocationCount = new AtomicInteger();
+        private volatile java.util.function.Consumer<RustInvocation> observer;
+
+        @Override
+        public void execute(RustInvocation invocation) {
+            invocationCount.incrementAndGet();
+
+            java.util.function.Consumer<RustInvocation> currentObserver = observer;
+            if (currentObserver != null) {
+                currentObserver.accept(invocation);
+            }
+
+            invocation.setException(
+                    new RustExecutionException(
+                            "Rust operation failed",
+                            invocation.getInvocationId()));
+
+            invocation.complete(true);
+        }
+
+        @Override
+        public void cancel(RustInvocation invocation) {
+            if (invocation != null) {
+                invocation.requestCancellation();
+                invocation.completeSynchronously();
+            }
+        }
+
+        void setObserver(java.util.function.Consumer<RustInvocation> observer) {
+            this.observer = observer;
+        }
+
+        int getInvocationCount() {
+            return invocationCount.get();
+        }
+
+        @Override
+        protected void doStart() {
+        }
+
+        @Override
+        protected void doStop() {
+        }
     }
 }

@@ -15,12 +15,13 @@
  * limitations under the License.
  */
 /*
+
 * Licensed to the Apache Software Foundation (ASF) under one or more
-* contributor license agreements.  See the NOTICE file distributed with
+* contributor license agreements. See the NOTICE file distributed with
 * this work for additional information regarding copyright ownership.
 * The ASF licenses this file to You under the Apache License, Version 2.0
-* (the "License"); you may not use this file except in compliance with
-* the License.  You may obtain a copy of the License at
+* (the "License"); you may not use this file except in compliance
+* with the License. You may obtain a copy of the License at
 *
 * ```
    http://www.apache.org/licenses/LICENSE-2.0
@@ -32,6 +33,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 */
+
 package org.apache.camel.component.rust;
 
 import java.lang.foreign.Arena;
@@ -60,14 +62,12 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class RustNativeBindings implements AutoCloseable {
 
-    private static final String NATIVE_LIBRARY_NAME = "camel-rust";
+    private static final String NATIVE_LIBRARY_NAME = "camel_rust";
 
     private static final int CAMEL_RUST_OK = 0;
     private static final int CAMEL_RUST_INVALID_RUNTIME = 1;
     private static final int CAMEL_RUST_INVALID_REQUEST = 2;
     private static final int CAMEL_RUST_INVALID_CALLBACK = 3;
-
-    private final RustPayloadCodec payloadCodec;
 
     private static final FunctionDescriptor RUNTIME_CREATE_DESCRIPTOR = FunctionDescriptor.of(ValueLayout.JAVA_LONG);
 
@@ -92,6 +92,8 @@ public final class RustNativeBindings implements AutoCloseable {
             ValueLayout.ADDRESS,
             ValueLayout.JAVA_LONG,
             ValueLayout.ADDRESS);
+
+    private final RustPayloadCodec payloadCodec;
 
     private final Arena arena;
     private final MethodHandle runtimeCreate;
@@ -126,7 +128,9 @@ public final class RustNativeBindings implements AutoCloseable {
         this.arena = Arena.ofShared();
 
         try {
-            SymbolLookup lookup = SymbolLookup.libraryLookup(libraryName, arena);
+            System.loadLibrary(libraryName);
+
+            SymbolLookup lookup = SymbolLookup.loaderLookup();
             Linker linker = Linker.nativeLinker();
 
             this.runtimeCreate = linker.downcallHandle(
@@ -221,7 +225,8 @@ public final class RustNativeBindings implements AutoCloseable {
         ensureOpen();
 
         if (runtimeHandle == 0) {
-            throw new IllegalArgumentException("runtimeHandle must not be zero");
+            throw new IllegalArgumentException(
+                    "runtimeHandle must not be zero");
         }
 
         if (invocationId == null || invocationId.isBlank()) {
@@ -580,4 +585,5 @@ public final class RustNativeBindings implements AutoCloseable {
             BINDINGS.remove(nativeInvocationId, bindings);
         }
     }
+
 }

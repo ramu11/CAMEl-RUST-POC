@@ -24,6 +24,7 @@ import org.apache.camel.CamelContext;
 import org.apache.camel.Exchange;
 import org.apache.camel.impl.DefaultCamelContext;
 import org.apache.camel.support.DefaultExchange;
+import org.apache.camel.support.service.ServiceSupport;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -43,6 +44,7 @@ public class RustPendingInvocationTest {
     void setUp() throws Exception {
         context = new DefaultCamelContext();
         context.start();
+
         registry = new PendingInvocationRegistry();
         registry.start();
     }
@@ -62,46 +64,79 @@ public class RustPendingInvocationTest {
         Exchange exchange = new DefaultExchange(context);
         CountDownLatch latch = new CountDownLatch(1);
 
-        RustInvocation invocation = new RustInvocation("inv-d7-1", exchange, doneSync -> latch.countDown());
+        RustInvocation invocation = new RustInvocation(
+                "inv-d7-1",
+                exchange,
+                doneSync -> latch.countDown());
 
-        // 1. Register invocation
         registry.register(invocation);
+
         assertEquals(1, registry.size(), "Registry must contain 1 pending invocation");
         assertTrue(registry.get("inv-d7-1").isPresent());
 
-        // 2. Complete invocation and unregister
         boolean completed = invocation.complete(false);
+
         assertTrue(completed);
 
         registry.unregister("inv-d7-1");
 
-        // 3. Assert safe de-registration and no orphaned invocations
-        assertTrue(registry.isEmpty(), "Registry must be empty post-completion removal");
+        assertTrue(registry.isEmpty(), "Registry must be empty after completion");
         assertFalse(registry.get("inv-d7-1").isPresent());
         assertTrue(latch.await(1, TimeUnit.SECONDS));
     }
 
     @Test
-    void testAsyncCompletionAutomaticallyRemovesPendingInvocation() throws Exception {
-        AsyncRuntime runtime = new AsyncRuntime(100);
-        runtime.start();
+    void testRuntimeCompletionRemovesPendingInvocation() throws Exception {
+        CountDownLatch executionStarted = new CountDownLatch(1);
+        CountDownLatch executionRelease = new CountDownLatch(1);
+        CountDownLatch completionLatch = new CountDownLatch(1);
 
-        RustProcessor processor = new RustProcessor("async", runtime, registry);
+        TestRustRuntime runtime = new TestRustRuntime(
+                executionStarted,
+                executionRelease);
 
         Exchange exchange = new DefaultExchange(context);
-        exchange.getIn().setBody("hello");
 
-        CountDownLatch latch = new CountDownLatch(1);
+        String invocationId = "inv-runtime-async";
 
-        boolean sync = processor.process(exchange, doneSync -> latch.countDown());
+        RustInvocation invocation = new RustInvocation(
+                invocationId,
+                "test-operation",
+                runtime,
+                exchange,
+                doneSync -> {
+                    registry.unregister(invocationId);
+                    completionLatch.countDown();
+                });
 
-        assertFalse(sync, "Async process() call must return false");
-        assertEquals(1, registry.size(), "Registry must hold pending invocation while executing");
+        registry.register(invocation);
 
-        assertTrue(latch.await(2, TimeUnit.SECONDS), "Async work must complete within timeout");
-        assertEquals(0, registry.size(), "Async completion must automatically remove pending invocation");
+        runtime.start();
+        try {
+            runtime.execute(invocation);
 
-        runtime.stop();
+            assertTrue(
+                    executionStarted.await(1, TimeUnit.SECONDS),
+                    "Rust runtime must begin asynchronous execution");
+
+            assertEquals(
+                    1,
+                    registry.size(),
+                    "Registry must retain invocation while Rust execution is pending");
+
+            executionRelease.countDown();
+
+            assertTrue(
+                    completionLatch.await(2, TimeUnit.SECONDS),
+                    "Rust invocation must complete");
+
+            assertEquals(
+                    0,
+                    registry.size(),
+                    "Completed invocation must be removed from the pending registry");
+        } finally {
+            runtime.stop();
+        }
     }
 
     @Test
@@ -109,11 +144,17 @@ public class RustPendingInvocationTest {
         Exchange exchange = new DefaultExchange(context);
         CountDownLatch latch = new CountDownLatch(1);
 
-        RustInvocation invocation = new RustInvocation("inv-sync-d7", exchange, doneSync -> latch.countDown());
+        RustInvocation invocation = new RustInvocation(
+                "inv-sync-d7",
+                exchange,
+                doneSync -> latch.countDown());
 
         registry.register(invocation);
 
-        assertEquals(1, registry.size(), "Registry must contain pending invocation before completion");
+        assertEquals(
+                1,
+                registry.size(),
+                "Registry must contain pending invocation before completion");
 
         boolean completed = invocation.complete(true);
 
@@ -122,7 +163,10 @@ public class RustPendingInvocationTest {
 
         registry.unregister(invocation.getInvocationId());
 
-        assertEquals(0, registry.size(), "Completed invocation must not remain in registry");
+        assertEquals(
+                0,
+                registry.size(),
+                "Completed invocation must not remain in registry");
     }
 
     @Test
@@ -133,13 +177,17 @@ public class RustPendingInvocationTest {
 
         String invocationId = "inv-race-d7";
 
-        RustInvocation invocation = new RustInvocation(invocationId, exchange, doneSync -> {
-            registry.unregister(invocationId);
-            callbackCount.incrementAndGet();
-            callbackLatch.countDown();
-        });
+        RustInvocation invocation = new RustInvocation(
+                invocationId,
+                exchange,
+                doneSync -> {
+                    registry.unregister(invocationId);
+                    callbackCount.incrementAndGet();
+                    callbackLatch.countDown();
+                });
 
         registry.register(invocation);
+
         assertEquals(1, registry.size());
 
         Thread threadA = new Thread(() -> invocation.complete(false));
@@ -152,14 +200,29 @@ public class RustPendingInvocationTest {
         threadB.join();
 
         assertTrue(callbackLatch.await(1, TimeUnit.SECONDS));
-        assertEquals(1, callbackCount.get(), "Callback must trigger exactly once");
-        assertEquals(0, registry.size(), "Race condition must result in single clean unregistration");
+        assertEquals(
+                1,
+                callbackCount.get(),
+                "Completion callback must execute exactly once");
+        assertEquals(
+                0,
+                registry.size(),
+                "Completion race must result in clean unregistration");
     }
 
     @Test
     void testDuplicateRegistrationIsRejected() {
-        RustInvocation first = new RustInvocation("same-id", null, null, null);
-        RustInvocation second = new RustInvocation("same-id", null, null, null);
+        RustInvocation first = new RustInvocation(
+                "same-id",
+                null,
+                null,
+                null);
+
+        RustInvocation second = new RustInvocation(
+                "same-id",
+                null,
+                null,
+                null);
 
         registry.register(first);
 
@@ -174,7 +237,11 @@ public class RustPendingInvocationTest {
 
     @Test
     void testCompletedInvocationIsNotRegistered() {
-        RustInvocation invocation = new RustInvocation("completed-id", null, null, null);
+        RustInvocation invocation = new RustInvocation(
+                "completed-id",
+                null,
+                null,
+                null);
 
         invocation.complete(true);
         registry.register(invocation);
@@ -183,4 +250,51 @@ public class RustPendingInvocationTest {
         assertTrue(registry.get("completed-id").isEmpty());
     }
 
+    private static final class TestRustRuntime extends ServiceSupport implements RustRuntime {
+
+        private final CountDownLatch executionStarted;
+        private final CountDownLatch executionRelease;
+
+        private TestRustRuntime(
+                                CountDownLatch executionStarted,
+                                CountDownLatch executionRelease) {
+
+            this.executionStarted = executionStarted;
+            this.executionRelease = executionRelease;
+        }
+
+        @Override
+        public void execute(RustInvocation invocation) {
+            Thread worker = new Thread(() -> {
+                executionStarted.countDown();
+
+                try {
+                    executionRelease.await(2, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    invocation.setException(e);
+                }
+
+                invocation.complete(false);
+            });
+
+            worker.start();
+        }
+
+        @Override
+        public void cancel(RustInvocation invocation) {
+            if (invocation != null) {
+                invocation.requestCancellation();
+                invocation.completeSynchronously();
+            }
+        }
+
+        @Override
+        protected void doStart() {
+        }
+
+        @Override
+        protected void doStop() {
+        }
+    }
 }

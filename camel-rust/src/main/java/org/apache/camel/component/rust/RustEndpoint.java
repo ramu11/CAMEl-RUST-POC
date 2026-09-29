@@ -25,19 +25,28 @@ import org.apache.camel.spi.UriEndpoint;
 import org.apache.camel.spi.UriPath;
 import org.apache.camel.support.DefaultEndpoint;
 
-@UriEndpoint(firstVersion = "2.23.0", scheme = "rust", title = "Rust", syntax = "rust:processorName", producerOnly = true,
+@UriEndpoint(
+             firstVersion = "2.23.0",
+             scheme = "rust",
+             title = "Rust",
+             syntax = "rust:operation",
+             producerOnly = true,
              category = { Category.CORE })
 public class RustEndpoint extends DefaultEndpoint {
 
-    @UriPath(description = "Name of the target Rust processor or execution function")
-    @Metadata(required = true, description = "Name of the target Rust processor or execution function")
-    private String processorName;
+    @UriPath(description = "Name of the Rust operation")
+    @Metadata(required = true, description = "Name of the Rust operation")
+    private String operation;
 
     private final RustRuntime runtime;
 
-    public RustEndpoint(String endpointUri, RustComponent component, String processorName, RustRuntime runtime) {
+    public RustEndpoint(
+                        String endpointUri,
+                        RustComponent component,
+                        String operation,
+                        RustRuntime runtime) {
         super(endpointUri, component);
-        this.processorName = processorName;
+        this.operation = operation;
         this.runtime = runtime;
     }
 
@@ -49,6 +58,7 @@ public class RustEndpoint extends DefaultEndpoint {
     @Override
     protected void doInit() throws Exception {
         super.doInit();
+
         if (runtime != null) {
             getCamelContext().addService(runtime, true);
         }
@@ -57,33 +67,38 @@ public class RustEndpoint extends DefaultEndpoint {
     @Override
     public Producer createProducer() throws Exception {
         PendingInvocationRegistry registry = getComponent() != null ? getComponent().getRegistry() : null;
-        RustProcessor processor = new RustProcessor(processorName, runtime, registry);
-        return new RustProducer(this, processor);
+
+        return new RustProducer(
+                this,
+                operation,
+                runtime,
+                registry);
     }
 
     @Override
     public Consumer createConsumer(Processor processor) throws Exception {
-        throw new UnsupportedOperationException("Rust component does not support consumer endpoints");
+        throw new UnsupportedOperationException(
+                "Rust component does not support consumer endpoints");
     }
 
     /**
      * Indicates that Camel may reuse this Endpoint instance within a CamelContext.
      *
-     * ARCHITECTURAL NOTE: Endpoint singleton lifecycle in Camel does NOT define Rust runtime thread-safety, state
-     * sharing, execution serialization, thread affinity, or native resource allocation. The Rust execution model
-     * concurrency and isolation policy remain open/deferred.
+     * Endpoint singleton lifecycle in Camel does not define Rust runtime thread-safety, state sharing, execution
+     * serialization, thread affinity, or native resource allocation. Those concerns belong to the Rust runtime
+     * implementation.
      */
     @Override
     public boolean isSingleton() {
         return true;
     }
 
-    public String getProcessorName() {
-        return processorName;
+    public String getOperation() {
+        return operation;
     }
 
-    public void setProcessorName(String processorName) {
-        this.processorName = processorName;
+    public void setOperation(String operation) {
+        this.operation = operation;
     }
 
     public RustRuntime getRuntime() {

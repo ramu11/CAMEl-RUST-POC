@@ -44,7 +44,8 @@ public class DefaultRustNativeRuntime extends ServiceSupport implements RustRunt
                     "RUST_RUNTIME_NOT_STARTED: Cannot execute invocation while runtime state is " + getStatus());
         }
 
-        RustInvocationRequest request = invocation.getContext().createRequest(invocation.getInvocationId());
+        RustInvocationRequest request
+                = invocation.getContext().createRequest(invocation.getInvocationId(), invocation.getOperation());
 
         byte[] payload = codec.encode(request);
 

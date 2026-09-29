@@ -21,23 +21,84 @@ import org.apache.camel.Exchange;
 import org.apache.camel.support.DefaultAsyncProducer;
 
 /**
- * Producer extending {@link DefaultAsyncProducer} to natively integrate with Camel's async engine.
+ * Camel producer responsible for invoking a configured Rust operation.
  */
 public class RustProducer extends DefaultAsyncProducer {
 
-    private final RustProcessor processor;
+    private final String operation;
+    private final RustRuntime runtime;
+    private final PendingInvocationRegistry registry;
 
-    public RustProducer(RustEndpoint endpoint, RustProcessor processor) {
+    public RustProducer(
+                        RustEndpoint endpoint,
+                        String operation,
+                        RustRuntime runtime,
+                        PendingInvocationRegistry registry) {
         super(endpoint);
-        this.processor = processor;
+        this.operation = operation;
+        this.runtime = runtime;
+        this.registry = registry;
     }
 
     @Override
     public boolean process(Exchange exchange, AsyncCallback callback) {
-        return processor.process(exchange, callback);
+        String invocationId = "inv-" + System.nanoTime();
+
+        RustInvocation invocation = new RustInvocation(
+                invocationId,
+                operation,
+                runtime,
+                exchange,
+                doneSync -> {
+                    if (registry != null) {
+                        registry.unregister(invocationId);
+                    }
+
+                    if (callback != null) {
+                        callback.done(doneSync);
+                    }
+                });
+
+        try {
+            if (registry != null) {
+                registry.register(invocation);
+            }
+
+            runtime.execute(invocation);
+
+            return invocation.isCompleted();
+        } catch (Exception e) {
+            if (e instanceof IllegalStateException illegalStateException) {
+                invocation.complete(true);
+                throw illegalStateException;
+            }
+
+            exchange.setException(normalizeException(e, invocationId));
+            invocation.complete(true);
+            return true;
+        }
     }
 
-    public RustProcessor getProcessor() {
-        return processor;
+    private Exception normalizeException(Exception e, String invocationId) {
+        if (e instanceof RustExecutionException) {
+            return e;
+        }
+
+        return new RustExecutionException(
+                "Rust execution failed for invocation " + invocationId,
+                e,
+                invocationId);
+    }
+
+    public String getOperation() {
+        return operation;
+    }
+
+    public RustRuntime getRuntime() {
+        return runtime;
+    }
+
+    public PendingInvocationRegistry getRegistry() {
+        return registry;
     }
 }

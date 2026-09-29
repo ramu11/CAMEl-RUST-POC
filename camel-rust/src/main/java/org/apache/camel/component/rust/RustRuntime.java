@@ -20,13 +20,17 @@ import org.apache.camel.StatefulService;
 
 /**
  * Service Provider Interface (SPI) decoupling the Camel component boundary from concrete Rust execution engines.
+ *
+ * <p>
+ * The runtime owns execution of a {@link RustInvocation}. It does not expose a Camel processor programming model.
+ * </p>
  */
 public interface RustRuntime extends StatefulService {
 
     /**
      * Executes the given invocation asynchronously or synchronously.
      *
-     * @param  invocation the execution wrapper holding exchange and callback handles
+     * @param  invocation the execution wrapper holding the Exchange and completion callback
      * @throws Exception  if execution fails prior to asynchronous handoff
      */
     void execute(RustInvocation invocation) throws Exception;
