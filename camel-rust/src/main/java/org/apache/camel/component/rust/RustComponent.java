@@ -73,7 +73,7 @@ public class RustComponent extends DefaultComponent {
 
     @Override
     protected Endpoint createEndpoint(String uri, String remaining, Map<String, Object> parameters) throws Exception {
-        RustRuntime runtime = runtimeFactory != null ? runtimeFactory.createRuntime(remaining) : new InProcessRuntime();
+        RustRuntime runtime = runtimeFactory != null ? runtimeFactory.createRuntime(remaining) : new DefaultRustNativeRuntime();
         RustEndpoint endpoint = new RustEndpoint(uri, this, remaining, runtime);
         setProperties(endpoint, parameters);
         return endpoint;

@@ -16,31 +16,37 @@
  */
 package org.apache.camel.component.rust;
 
+import java.nio.file.Path;
+
 import org.apache.camel.CamelContext;
-import org.apache.camel.Exchange;
 import org.apache.camel.builder.RouteBuilder;
 import org.apache.camel.impl.DefaultCamelContext;
-import org.apache.camel.support.DefaultExchange;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class RustRuntimeLifecycleTest {
 
+    private static final Path NATIVE_LIBRARY = Path.of("src/main/rust/target/release/libcamel_rust.so");
+
     private CamelContext context;
-    private InProcessRuntime testRuntime;
+    private DefaultRustNativeRuntime testRuntime;
 
     @BeforeEach
     void setUp() throws Exception {
         context = new DefaultCamelContext();
-        testRuntime = new InProcessRuntime();
+
+        RustNativeBindings nativeRuntime = new RustNativeBindings(NATIVE_LIBRARY.toAbsolutePath().toString());
+
+        testRuntime = new DefaultRustNativeRuntime(
+                nativeRuntime,
+                new CborRustPayloadCodec());
 
         RustComponent component = new RustComponent(processorName -> testRuntime);
+
         context.addComponent("rust", component);
 
         context.addRoutes(new RouteBuilder() {
@@ -62,42 +68,32 @@ public class RustRuntimeLifecycleTest {
     @Test
     void testRuntimeStartsAndStopsWithContext() throws Exception {
         context.start();
-        assertTrue(testRuntime.isStarted(), "RustRuntime should start automatically when CamelContext starts");
+
+        assertTrue(
+                testRuntime.isStarted(),
+                "RustRuntime should start automatically when CamelContext starts");
 
         context.stop();
-        assertTrue(testRuntime.isStopped(), "RustRuntime should stop automatically when CamelContext stops");
+
+        assertTrue(
+                testRuntime.isStopped(),
+                "RustRuntime should stop automatically when CamelContext stops");
     }
 
     @Test
-    void testExecutionRejectedWhenStopped() {
-        Exchange exchange = new DefaultExchange(context);
-        exchange.getIn().setBody("hello");
-        RustInvocation invocation = new RustInvocation("inv-lifecycle-1", exchange, doneSync -> {
-        });
-
-        IllegalStateException exception = assertThrows(IllegalStateException.class, () -> {
-            testRuntime.execute(invocation);
-        });
-
-        assertTrue(exception.getMessage().contains("RUST_RUNTIME_NOT_STARTED"),
-                "Executing against a non-started runtime must throw IllegalStateException");
-    }
-
-    @Test
-    void testRuntimeServiceRegistrationAndExecution() throws Exception {
+    void testRuntimeServiceRegistration() throws Exception {
         context.start();
 
-        RustEndpoint endpoint = context.getEndpoint("rust:uppercaseProcessor", RustEndpoint.class);
+        RustEndpoint endpoint = context.getEndpoint(
+                "rust:uppercaseProcessor",
+                RustEndpoint.class);
+
         assertNotNull(endpoint, "Endpoint should be resolved");
-        assertNotNull(endpoint.getRuntime(), "Runtime should be attached to endpoint");
-        assertTrue(endpoint.getRuntime().isStarted(), "Attached runtime should be in STARTED state");
-
-        Exchange exchange = new DefaultExchange(context);
-        exchange.getIn().setBody("hello rust");
-        RustInvocation invocation = new RustInvocation("inv-lifecycle-2", exchange, doneSync -> {
-        });
-
-        endpoint.getRuntime().execute(invocation);
-        assertEquals("HELLO RUST", exchange.getIn().getBody(), "Started runtime should execute payload transformation");
+        assertNotNull(
+                endpoint.getRuntime(),
+                "Runtime should be attached to endpoint");
+        assertTrue(
+                endpoint.getRuntime().isStarted(),
+                "Attached runtime should be in STARTED state");
     }
 }

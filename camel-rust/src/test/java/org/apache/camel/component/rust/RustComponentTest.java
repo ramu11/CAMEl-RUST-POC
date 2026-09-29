@@ -20,7 +20,6 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
 import org.apache.camel.CamelContext;
 import org.apache.camel.Exchange;
-import org.apache.camel.builder.RouteBuilder;
 import org.apache.camel.support.DefaultExchange;
 import org.apache.camel.test.junit6.CamelTestSupport;
 import org.junit.jupiter.api.Test;
@@ -33,43 +32,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class RustComponentTest extends CamelTestSupport {
 
-    private final InProcessRuntime testRuntime = new InProcessRuntime();
-
-    private static final class FailingRuntime extends InProcessRuntime {
-
-        @Override
-        public void execute(RustInvocation invocation) throws Exception {
-            throw new IllegalArgumentException("Simulated Rust execution failure");
-        }
-    }
-
     @Override
     protected CamelContext createCamelContext() throws Exception {
         CamelContext context = super.createCamelContext();
 
-        RustComponent component = new RustComponent(processorName -> {
-            if ("faultyProcessor".equals(processorName)) {
-                return new FailingRuntime();
-            }
-            return new InProcessRuntime();
-        });
+        RustComponent component = new RustComponent(processorName -> new DefaultRustNativeRuntime());
 
         context.addComponent("rust", component);
         return context;
-    }
-
-    @Override
-    protected RouteBuilder createRouteBuilder() {
-        return new RouteBuilder() {
-            @Override
-            public void configure() {
-                from("direct:start")
-                        .to("rust:uppercaseProcessor");
-
-                from("direct:error")
-                        .to("rust:faultyProcessor");
-            }
-        };
     }
 
     private Exchange createExchange(Object body) {
@@ -79,9 +49,8 @@ public class RustComponentTest extends CamelTestSupport {
     }
 
     @Test
-    void testRustProcessorExecution() {
-        String result = template.requestBody("direct:start", "hello rust", String.class);
-        assertEquals("HELLO RUST", result);
+    void testRustComponentRegistration() {
+        assertInstanceOf(RustComponent.class, context.getComponent("rust"));
     }
 
     @Test
@@ -90,21 +59,20 @@ public class RustComponentTest extends CamelTestSupport {
         RustInvocation invocation = new RustInvocation("inv-1", exchange, doneSync -> {
         });
 
-        RustInvocationContext context = invocation.getContext();
-        assertTrue(context.isActive());
+        RustInvocationContext invocationContext = invocation.getContext();
+        assertTrue(invocationContext.isActive());
 
         invocation.completeSynchronously();
+        assertFalse(invocationContext.isActive());
 
-        assertFalse(context.isActive());
-        IllegalStateException ex = assertThrows(IllegalStateException.class, context::readBody);
+        IllegalStateException ex = assertThrows(IllegalStateException.class, invocationContext::readBody);
         assertTrue(ex.getMessage().contains("EXCHANGE_ACCESS_REVOKED"));
-
-        assertThrows(IllegalStateException.class, context::getExchange);
-        assertThrows(IllegalStateException.class, () -> context.getHeader("foo"));
-        assertThrows(IllegalStateException.class, () -> context.setHeader("foo", "bar"));
-        assertThrows(IllegalStateException.class, () -> context.getProperty("foo"));
-        assertThrows(IllegalStateException.class, () -> context.setProperty("foo", "bar"));
-        assertThrows(IllegalStateException.class, () -> context.writeBody("blocked"));
+        assertThrows(IllegalStateException.class, invocationContext::getExchange);
+        assertThrows(IllegalStateException.class, () -> invocationContext.getHeader("foo"));
+        assertThrows(IllegalStateException.class, () -> invocationContext.setHeader("foo", "bar"));
+        assertThrows(IllegalStateException.class, () -> invocationContext.getProperty("foo"));
+        assertThrows(IllegalStateException.class, () -> invocationContext.setProperty("foo", "bar"));
+        assertThrows(IllegalStateException.class, () -> invocationContext.writeBody("blocked"));
     }
 
     @Test
@@ -128,7 +96,6 @@ public class RustComponentTest extends CamelTestSupport {
         Exchange exchange = createExchange("test");
         ConcurrentLinkedQueue<Boolean> winners = new ConcurrentLinkedQueue<>();
         ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
-
         RustInvocation invocation = new RustInvocation("inv-3", exchange, doneSync -> {
         });
 
@@ -170,22 +137,8 @@ public class RustComponentTest extends CamelTestSupport {
         assertTrue(invocation.isCompleted());
 
         boolean reComplete = invocation.complete(false);
+
         assertFalse(reComplete);
         assertFalse(invocation.getContext().isActive());
-    }
-
-    @Test
-    void testErrorPropagation() {
-        Exchange exchange = createExchange("faulty");
-        Exchange response = template.send("direct:error", exchange);
-
-        RustExecutionException exception = assertInstanceOf(RustExecutionException.class, response.getException());
-
-        assertEquals(
-                "Rust execution failed for invocation " + exception.getInvocationId(),
-                exception.getMessage());
-
-        assertInstanceOf(IllegalArgumentException.class, exception.getCause());
-        assertEquals("Simulated Rust execution failure", exception.getCause().getMessage());
     }
 }

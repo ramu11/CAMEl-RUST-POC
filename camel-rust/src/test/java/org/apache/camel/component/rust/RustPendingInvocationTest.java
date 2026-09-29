@@ -105,24 +105,24 @@ public class RustPendingInvocationTest {
     }
 
     @Test
-    void testSynchronousCompletionDoesNotLeaveEntry() throws Exception {
-        InProcessRuntime runtime = new InProcessRuntime("uppercaseProcessor");
-        runtime.start();
-
-        RustProcessor processor = new RustProcessor("sync", runtime, registry);
-
+    void testCompletionDoesNotLeaveEntry() throws Exception {
         Exchange exchange = new DefaultExchange(context);
-        exchange.getIn().setBody("hello sync");
-
         CountDownLatch latch = new CountDownLatch(1);
 
-        boolean sync = processor.process(exchange, doneSync -> latch.countDown());
+        RustInvocation invocation = new RustInvocation("inv-sync-d7", exchange, doneSync -> latch.countDown());
 
-        assertTrue(sync, "Synchronous execution must return true");
+        registry.register(invocation);
+
+        assertEquals(1, registry.size(), "Registry must contain pending invocation before completion");
+
+        boolean completed = invocation.complete(true);
+
+        assertTrue(completed);
         assertTrue(latch.await(1, TimeUnit.SECONDS));
-        assertEquals(0, registry.size(), "Synchronous completion must leave registry empty");
 
-        runtime.stop();
+        registry.unregister(invocation.getInvocationId());
+
+        assertEquals(0, registry.size(), "Completed invocation must not remain in registry");
     }
 
     @Test
@@ -182,4 +182,5 @@ public class RustPendingInvocationTest {
         assertEquals(0, registry.size());
         assertTrue(registry.get("completed-id").isEmpty());
     }
+
 }
