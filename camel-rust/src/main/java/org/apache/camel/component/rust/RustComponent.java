@@ -33,7 +33,7 @@ public class RustComponent extends DefaultComponent {
     private final PendingInvocationRegistry registry = new PendingInvocationRegistry();
 
     public RustComponent() {
-        this(processorName -> new InProcessRuntime());
+        this(processorName -> new DefaultRustNativeRuntime());
     }
 
     public RustComponent(RustRuntimeFactory runtimeFactory) {
