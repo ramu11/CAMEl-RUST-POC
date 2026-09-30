@@ -69,6 +69,27 @@ fn execute_operation(request: RustInvocationRequest) -> RustInvocationResponse {
     }
 }
 
+fn encode_completion_response(response: &RustInvocationResponse) -> Vec<u8> {
+    match encode_response(response) {
+        Ok(response) => response,
+        Err(_) => {
+            let fallback = RustInvocationResponse::failure(
+                response.invocation_id.clone(),
+                ciborium::Value::Null,
+                ciborium::Value::Map(Vec::new()),
+                "RUST_RESPONSE_ENCODING_FAILED",
+                "Rust runtime failed to encode the invocation response",
+                None,
+            );
+
+            match encode_response(&fallback) {
+                Ok(response) => response,
+                Err(_) => Vec::new(),
+            }
+        }
+    }
+}
+
 pub(crate) fn complete_invocation(
     registry: Arc<InvocationRegistry>,
     invocation_id: u64,
@@ -91,13 +112,7 @@ pub(crate) fn complete_invocation(
         execute_operation(request)
     };
 
-    let response_bytes = match encode_response(&response) {
-        Ok(response) => response,
-        Err(_) => {
-            registry.remove(invocation_id);
-            return;
-        }
-    };
+    let response_bytes = encode_completion_response(&response);
 
     unsafe {
         completion_callback(
